@@ -64,12 +64,20 @@ export interface ProctorLog {
   snapshotUrl?: string;
 }
 
+export interface PerformanceMetrics {
+  logic: number;
+  syntax: number;
+  optimization: number;
+  documentation: number;
+}
+
 export interface Submission {
   id: string;
   studentId: string;
   testId: string;
   answers: Record<string, any>; // questionId -> answer
   score: number;
+  metrics: PerformanceMetrics;
   sectionScores: Record<string, number>;
   logs: ProctorLog[];
   submittedAt: number;

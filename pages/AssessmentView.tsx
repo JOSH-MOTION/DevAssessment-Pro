@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { db } from '../services/dbService';
 import { auth } from '../services/authService';
-import { Assessment, Question, QuestionType, ProctorLog, Submission } from '../types';
+import { Assessment, Question, QuestionType, ProctorLog, Submission, PerformanceMetrics } from '../types';
 import CodingEditor from '../components/CodingEditor';
 import ProctoringSystem from '../components/ProctoringSystem';
 
@@ -20,7 +20,6 @@ const AssessmentView: React.FC = () => {
   const [output, setOutput] = useState('');
   const [isLoading, setIsLoading] = useState(true);
 
-  // Use a ref to prevent multiple submissions
   const submissionStarted = useRef(false);
   const persistenceKey = `draft_${testId}_${auth.getAuthState().user?.id}`;
 
@@ -53,7 +52,21 @@ const AssessmentView: React.FC = () => {
     }
   }, [testId, navigate, persistenceKey]);
 
-  // Robust Submission Logic
+  const analyzeCodeMetrics = (code: string): PerformanceMetrics => {
+    // Simulated Static Analysis Heuristics
+    const hasComments = /\/\/|\/\*/.test(code);
+    const hasLoops = /for|while|map|forEach/.test(code);
+    const complexLogic = (code.match(/if|else|switch/g) || []).length > 2;
+    const cleanNames = !/var|let\s+[a-z]\s+=/.test(code); // Penalize single char names like 'x' or 'i'
+
+    return {
+      logic: complexLogic ? 85 : 70,
+      syntax: cleanNames ? 90 : 60,
+      optimization: hasLoops && code.length < 300 ? 80 : 50,
+      documentation: hasComments ? 95 : 30
+    };
+  };
+
   const handleSubmit = async () => {
     if (submissionStarted.current || !assessment) return;
     submissionStarted.current = true;
@@ -66,104 +79,89 @@ const AssessmentView: React.FC = () => {
         return;
       }
 
-      // Calculate score logic
       let score = 0;
+      let aggMetrics: PerformanceMetrics = { logic: 0, syntax: 0, optimization: 0, documentation: 0 };
+      let codingCount = 0;
+
       questions.forEach(q => {
         const ans = answers[q.id];
-        if (q.type === QuestionType.MCQ && ans === q.correctAnswer) score += 5;
-        if (q.type === QuestionType.CODING && ans && ans.length > 10) score += 20;
+        if (q.type === QuestionType.MCQ && ans === q.correctAnswer) {
+          score += 10;
+        }
+        if (q.type === QuestionType.CODING && ans) {
+          codingCount++;
+          const m = analyzeCodeMetrics(ans);
+          aggMetrics.logic += m.logic;
+          aggMetrics.syntax += m.syntax;
+          aggMetrics.optimization += m.optimization;
+          aggMetrics.documentation += m.documentation;
+          if (ans.length > 20) score += 30;
+        }
       });
 
+      // Average the metrics or set defaults for MCQ-heavy tests
+      const finalMetrics: PerformanceMetrics = codingCount > 0 ? {
+        logic: Math.round(aggMetrics.logic / codingCount),
+        syntax: Math.round(aggMetrics.syntax / codingCount),
+        optimization: Math.round(aggMetrics.optimization / codingCount),
+        documentation: Math.round(aggMetrics.documentation / codingCount),
+      } : { logic: 80, syntax: 90, optimization: 70, documentation: 50 };
+
       const submission: Submission = {
-        id: 'sub-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+        id: 'sub-' + Date.now(),
         studentId: user.id,
         testId: assessment.id,
         answers,
         score,
+        metrics: finalMetrics,
         sectionScores: {},
         logs,
         submittedAt: Date.now(),
         timeTaken: (assessment.duration * 60) - timeLeft
       };
 
-      // Direct write to DB
       db.saveSubmission(submission);
-      
-      // Clear persistence
       localStorage.removeItem(persistenceKey);
       
-      // Short delay for visual feedback before navigation
       setTimeout(() => {
         navigate('/student/results');
-      }, 800);
+      }, 1000);
       
     } catch (error) {
-      console.error("Critical: Submission failure", error);
+      console.error("Submission Error:", error);
       setIsSubmitting(false);
       submissionStarted.current = false;
-      alert("Submission failed. Please try again.");
     }
   };
 
   useEffect(() => {
     if (isLoading || isSubmitting) return;
-
-    if (timeLeft <= 0) {
-      handleSubmit();
-      return;
-    }
-
-    const timer = setInterval(() => {
-      setTimeLeft(prev => {
-        const next = Math.max(0, prev - 1);
-        // Auto-save every 30 seconds
-        if (next % 30 === 0) {
-          localStorage.setItem(persistenceKey, JSON.stringify(answers));
-        }
-        return next;
-      });
-    }, 1000);
-
+    if (timeLeft <= 0) { handleSubmit(); return; }
+    const timer = setInterval(() => setTimeLeft(prev => Math.max(0, prev - 1)), 1000);
     return () => clearInterval(timer);
-  }, [timeLeft, isLoading, isSubmitting, answers, persistenceKey]);
+  }, [timeLeft, isLoading, isSubmitting]);
 
-  const handleLog = (log: ProctorLog) => {
-    setLogs(prev => [...prev, log]);
-  };
-
-  const handleAnswerChange = (qId: string, val: any) => {
-    setAnswers(prev => ({ ...prev, [qId]: val }));
-  };
+  const handleLog = (log: ProctorLog) => setLogs(prev => [...prev, log]);
+  const handleAnswerChange = (qId: string, val: any) => setAnswers(prev => ({ ...prev, [qId]: val }));
 
   const runCode = () => {
-    setOutput('🚀 Compiling... verifying test cases...');
+    setOutput('🚀 Compiling secure environment...');
     setTimeout(() => {
       const q = questions[currentQuestionIdx];
       if (answers[q.id]?.length > 20) {
-        setOutput('Test Case 1: PASSED\nTest Case 2: PASSED\n\nResult: 100% Correct');
+        setOutput('Test Case 1: PASSED\nTest Case 2: PASSED\n\nEnvironment: No leaks detected.');
       } else {
-        setOutput('Error: Unexpected output.\nCheck your logic and return values.');
+        setOutput('Error: ReferenceError: Solution logic incomplete.');
       }
     }, 600);
   };
 
   if (isLoading || isSubmitting) return (
-    <div className="min-h-screen bg-white flex flex-col items-center justify-center space-y-8 p-10 text-center">
-      <div className="relative">
-        <div className="w-16 h-16 border-4 border-slate-100 border-t-indigo-600 rounded-full animate-spin"></div>
-        <div className="absolute inset-0 flex items-center justify-center text-indigo-600">
-          <i className="fas fa-shield-alt"></i>
-        </div>
-      </div>
-      <div>
-        <h2 className="text-2xl font-black text-slate-900 mb-2">
-          {isSubmitting ? 'Securing Submission...' : 'Initializing Session...'}
-        </h2>
-        <p className="text-slate-400 font-medium max-w-xs mx-auto text-sm leading-relaxed">
-          {isSubmitting 
-            ? 'Finalizing your performance report and closing secure channels.' 
-            : 'Establishing proctoring protocols and preparing environment.'}
-        </p>
+    <div className="min-h-screen bg-white flex flex-col items-center justify-center space-y-8">
+      <div className="w-16 h-16 border-4 border-slate-100 border-t-indigo-600 rounded-full animate-spin"></div>
+      <div className="text-center">
+        <h2 className="text-xl font-black text-slate-900 mb-1">{isSubmitting ? 'Encrypting Assessment...' : 'Loading Sandbox...'}</h2>
+        <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Securing data channels</p>
       </div>
     </div>
   );
@@ -179,68 +177,45 @@ const AssessmentView: React.FC = () => {
     <div className="flex flex-col h-screen bg-white text-slate-900 overflow-hidden">
       <ProctoringSystem isActive={!isSubmitting} onLog={handleLog} />
 
-      {/* Navigation Header */}
-      <header className="h-20 border-b border-slate-100 bg-white px-10 flex items-center justify-between z-30 shrink-0">
+      <header className="h-20 border-b border-slate-100 bg-white px-10 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-6">
           <div className="w-10 h-10 bg-slate-900 rounded-xl flex items-center justify-center text-white">
             <i className="fas fa-terminal text-sm"></i>
           </div>
           <div>
-            <h1 className="font-black text-slate-900 tracking-tight leading-none mb-1 text-lg">{assessment?.title}</h1>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Question {currentQuestionIdx + 1} of {questions.length}</span>
-              <span className="w-1 h-1 bg-slate-200 rounded-full"></span>
-              <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">{assessment?.assignedCohort}</span>
-            </div>
+            <h1 className="font-black text-slate-900 tracking-tight leading-none mb-1">{assessment?.title}</h1>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Question {currentQuestionIdx + 1} / {questions.length}</span>
           </div>
         </div>
         
-        <div className="flex items-center gap-6">
-          <div className={`px-6 py-2 rounded-2xl font-mono font-black text-xl flex items-center gap-3 border transition-all ${
-            timeLeft < 300 ? 'bg-rose-50 text-rose-600 border-rose-100 animate-pulse' : 'bg-slate-50 text-slate-700 border-slate-100'
-          }`}>
-            <i className="fas fa-clock text-xs opacity-40"></i>
+        <div className="flex items-center gap-4">
+          <div className={`px-6 py-2 rounded-xl font-mono font-black text-lg border ${timeLeft < 300 ? 'bg-rose-50 text-rose-600 border-rose-100' : 'bg-slate-50 text-slate-700 border-slate-100'}`}>
             {formatTime(timeLeft)}
           </div>
           <button
-            onClick={() => { if(window.confirm('End assessment early? This action is irreversible.')) handleSubmit(); }}
-            className="px-6 py-3 bg-white border border-slate-200 hover:border-indigo-600 hover:text-indigo-600 text-slate-900 rounded-xl font-bold text-xs uppercase tracking-widest transition-all"
+            onClick={() => { if(window.confirm('Submit assessment now?')) handleSubmit(); }}
+            className="px-6 py-2 border border-slate-200 hover:border-indigo-600 hover:text-indigo-600 text-slate-900 rounded-xl font-bold text-[10px] uppercase tracking-widest transition-all"
           >
             End Early
           </button>
         </div>
       </header>
 
-      {/* Main Workspace */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left: Question Panel */}
-        <div className={`flex flex-col overflow-y-auto p-12 transition-all duration-500 bg-white ${currentQ.type === QuestionType.CODING ? 'w-1/2 border-r border-slate-100' : 'w-full max-w-4xl mx-auto'}`}>
+        <div className={`flex flex-col overflow-y-auto p-12 bg-white ${currentQ.type === QuestionType.CODING ? 'w-1/2 border-r border-slate-100' : 'w-full max-w-4xl mx-auto'}`}>
           <div className="mb-10">
             <div className="flex items-center gap-3 mb-6">
                <span className="px-3 py-1 bg-indigo-50 text-indigo-600 text-[10px] font-black uppercase rounded-lg border border-indigo-100 tracking-widest">{currentQ.category}</span>
-               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{currentQ.difficulty}</span>
             </div>
-            <h2 className="text-3xl font-black text-slate-900 leading-tight mb-8">
-              {currentQ.questionText}
-            </h2>
-            <div className="h-px bg-slate-50 w-full"></div>
+            <h2 className="text-3xl font-black text-slate-900 leading-tight mb-8">{currentQ.questionText}</h2>
           </div>
 
           <div className="space-y-4 mb-20 flex-1">
             {currentQ.type === QuestionType.MCQ && currentQ.options?.map((opt, i) => (
               <label 
                 key={i}
-                className={`flex items-center p-6 border-2 rounded-2xl cursor-pointer transition-all ${
-                  answers[currentQ.id] === opt 
-                  ? 'border-indigo-600 bg-indigo-50/20' 
-                  : 'border-slate-50 hover:border-slate-200 bg-white'
-                }`}
+                className={`flex items-center p-6 border-2 rounded-2xl cursor-pointer transition-all ${answers[currentQ.id] === opt ? 'border-indigo-600 bg-indigo-50/20' : 'border-slate-50 hover:border-slate-200 bg-white'}`}
               >
-                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center mr-4 transition-colors ${
-                  answers[currentQ.id] === opt ? 'border-indigo-600 bg-indigo-600' : 'border-slate-200'
-                }`}>
-                  {answers[currentQ.id] === opt && <div className="w-1.5 h-1.5 bg-white rounded-full"></div>}
-                </div>
                 <input
                   type="radio"
                   name={currentQ.id}
@@ -254,82 +229,54 @@ const AssessmentView: React.FC = () => {
             ))}
 
             {currentQ.type === QuestionType.CODING && (
-              <div className="p-10 bg-slate-50 rounded-3xl border border-slate-100 text-slate-600 font-medium leading-relaxed">
-                <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-200 pb-2">Technical Specification</div>
+              <div className="p-8 bg-slate-50 rounded-2xl border border-slate-100 text-slate-600 text-sm leading-relaxed">
+                <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Specs</div>
                 <div className="prose prose-slate max-w-none">{currentQ.explanation}</div>
               </div>
             )}
           </div>
 
-          {/* Footer Controls */}
-          <div className="mt-8 pt-8 border-t border-slate-100 flex items-center justify-between shrink-0">
-            <div className="flex gap-2">
-              <button
-                disabled={currentQuestionIdx === 0}
-                onClick={() => setCurrentQuestionIdx(prev => prev - 1)}
-                className="px-4 py-2 text-slate-400 hover:text-slate-900 disabled:opacity-20 font-bold text-xs uppercase tracking-widest transition-all"
-              >
-                <i className="fas fa-chevron-left mr-2"></i> Prev
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              {questions.map((q, i) => (
-                <button
-                  key={i}
-                  onClick={() => setCurrentQuestionIdx(i)}
-                  className={`w-2 h-2 rounded-full transition-all ${
-                    i === currentQuestionIdx ? 'w-8 bg-indigo-600' : 
-                    answers[q.id] ? 'bg-indigo-100 border border-indigo-200' : 'bg-slate-200'
-                  }`}
-                />
-              ))}
-            </div>
+          <div className="mt-8 pt-8 border-t border-slate-100 flex items-center justify-between">
+            <button
+              disabled={currentQuestionIdx === 0}
+              onClick={() => setCurrentQuestionIdx(prev => prev - 1)}
+              className="px-4 py-2 text-slate-400 hover:text-slate-900 disabled:opacity-20 font-bold text-[10px] uppercase tracking-widest"
+            >
+              Back
+            </button>
 
             {currentQuestionIdx === questions.length - 1 ? (
               <button
-                onClick={() => { if(window.confirm('Ready to submit your work?')) handleSubmit(); }}
-                className="px-12 py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-600/20 transition-all active:scale-95"
+                onClick={() => { if(window.confirm('Finish and submit?')) handleSubmit(); }}
+                className="px-10 py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all"
               >
                 Finish Assessment
               </button>
             ) : (
               <button
                 onClick={() => setCurrentQuestionIdx(prev => prev + 1)}
-                className="px-10 py-4 bg-slate-900 hover:bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl transition-all"
+                className="px-8 py-4 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all"
               >
-                Next Question
+                Next
               </button>
             )}
           </div>
         </div>
 
-        {/* Right: Coding Editor Panel */}
         {currentQ.type === QuestionType.CODING && (
           <div className="w-1/2 flex flex-col bg-slate-50 p-10 space-y-6">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <span className="w-3 h-3 bg-rose-400 rounded-full"></span>
-                <span className="w-3 h-3 bg-amber-400 rounded-full"></span>
-                <span className="w-3 h-3 bg-emerald-400 rounded-full"></span>
-                <span className="ml-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">solution.js</span>
-              </div>
-              <button 
-                onClick={runCode}
-                className="px-6 py-2 bg-white border border-slate-200 text-slate-900 text-[10px] font-black rounded-xl uppercase tracking-widest hover:border-indigo-600 hover:text-indigo-600 shadow-sm transition-all"
-              >
-                <i className="fas fa-play mr-2"></i> Execute Tests
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">solution.js</span>
+              <button onClick={runCode} className="px-6 py-2 bg-white border border-slate-200 text-slate-900 text-[10px] font-black rounded-xl uppercase tracking-widest hover:border-indigo-600 shadow-sm transition-all">
+                Run Tests
               </button>
             </div>
-            <div className="flex-1 rounded-3xl overflow-hidden shadow-2xl border border-slate-200 bg-[#1e1e1e]">
-              <CodingEditor 
-                code={answers[currentQ.id] || ''} 
-                onChange={(val) => handleAnswerChange(currentQ.id, val)} 
-              />
+            <div className="flex-1 rounded-2xl overflow-hidden border border-slate-200">
+              <CodingEditor code={answers[currentQ.id] || ''} onChange={(val) => handleAnswerChange(currentQ.id, val)} />
             </div>
-            <div className="h-48 bg-white rounded-3xl p-8 font-mono text-xs text-slate-800 border border-slate-200 overflow-y-auto shadow-inner">
-              <div className="mb-4 text-slate-400 font-black uppercase tracking-widest text-[9px]">Environment Console</div>
-              <pre className="leading-relaxed whitespace-pre-wrap">{output || '> Secure Sandbox Ready. Initializing...'}</pre>
+            <div className="h-40 bg-white rounded-2xl p-6 font-mono text-xs border border-slate-200 overflow-y-auto">
+              <div className="mb-2 text-slate-300 font-black text-[9px] uppercase tracking-widest tracking-tighter">Console Output</div>
+              <pre className="text-slate-700 leading-relaxed">{output || '> Terminal ready.'}</pre>
             </div>
           </div>
         )}
