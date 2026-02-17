@@ -1,0 +1,7 @@
+{
+  "name": "DevAssessment Pro",
+  "description": "A production-ready technical assessment platform featuring secure proctoring, coding challenges, and comprehensive analytics for engineering cohorts.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
